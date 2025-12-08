@@ -47,7 +47,10 @@ line-length = 120
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.1.0",
     "ipython>=9.8.0",
+    "pytest-profiling>=1.8.1",
+    "snakeviz>=2.2.2",
 ]
 
 [tool.ruff.lint]
