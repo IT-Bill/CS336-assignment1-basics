@@ -1,8 +1,7 @@
 import os
 import regex as re
 from typing import BinaryIO
-from collections import Counter
-
+from collections import defaultdict
 
 def _find_chunk_boundaries(
     file: BinaryIO,
@@ -55,7 +54,7 @@ def _remove_special_tokens(text: str, special_tokens: list[str]) -> list[str]:
     return [s for s in re.split("|".join([re.escape(t) for t in special_tokens]), text) if s]
 
 
-def _pre_tokenize(text: str, special_tokens: list[str]) -> Counter[tuple[bytes, ...]]:
+def _pre_tokenize(text: str, special_tokens: list[str]) -> dict[tuple[bytes, ...], int]:
     PRE_TOKENIZER_RE = re.compile(
         r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     )
@@ -63,7 +62,7 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> Counter[tuple[bytes, 
 
     sub_chunks = _remove_special_tokens(text, special_tokens)
 
-    token_count: Counter[tuple[bytes, ...]] = Counter()
+    token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
 
     for sub_chunk in sub_chunks:
         # Run pre-tokenization on your chunk and store the counts for each pre-token
@@ -74,33 +73,33 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> Counter[tuple[bytes, 
 
 
 def _merge(
-    token_count: Counter[tuple[bytes, ...]], num_merges: int
-) -> tuple[Counter[tuple[bytes, ...]], list[tuple[bytes, bytes]]]:
+    token_count: dict[tuple[bytes, ...], int], num_merges: int
+) -> tuple[dict[tuple[bytes, ...], int], list[tuple[bytes, bytes]]]:
     merged_pairs: list[tuple[bytes, bytes]] = []
 
     # Number of merges
     for _ in range(num_merges):
-        nearby_count: Counter[tuple[bytes, bytes]] = Counter()
+        nearby_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
 
         for bytes_tuple, count in token_count.items():
             for i in range(len(bytes_tuple) - 1):
                 nearby_count[(bytes_tuple[i], bytes_tuple[i + 1])] += count
 
         # Lexiographically greater pair
-        most_common_pair, max_count = nearby_count.most_common(1)[0]
-        for bytes_pair, count in nearby_count.items():
-            if count < max_count:
-                break
-            if bytes_pair > most_common_pair:
-                most_common_pair = bytes_pair
+        most_common_pair, _ = max(nearby_count.items(), key=lambda c: (c[1], c[0]))
         
         merged_pairs.append(most_common_pair)
-        # print(nearby_count.most_common(1)[0])
 
         # Update token_count
-        new_token_count: Counter[tuple[bytes, ...]] = Counter()
+        new_token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
 
         for bytes_tuple, count in token_count.items():
+            
+            # Perf: Skip if each bytes of most_common_pair not in bytes_tuple
+            if most_common_pair[0] not in bytes_tuple or most_common_pair[1] not in bytes_tuple:
+                new_token_count[bytes_tuple] = count
+                continue
+            
             new_bytes_list: list[bytes] = []
             num_bytes = len(bytes_tuple)
             i = 0
