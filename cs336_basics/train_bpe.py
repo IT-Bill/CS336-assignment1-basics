@@ -1,5 +1,8 @@
 import os
+import json
+import functools
 import regex as re
+from tqdm import tqdm
 from typing import BinaryIO
 from collections import defaultdict
 
@@ -79,7 +82,7 @@ def _merge(
     merged_pairs: list[tuple[bytes, bytes]] = []
 
     # Number of merges
-    for _ in range(num_merges):
+    for _ in tqdm(range(num_merges)):
         nearby_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
 
         for bytes_tuple, count in token_count.items():
@@ -174,11 +177,70 @@ def train_bpe(
 
     return vocab, merged_pairs
 
+
+@functools.lru_cache
+def bytes_to_unicode():
+    """
+    Returns list of utf-8 byte and a corresponding list of unicode strings.
+    The reversible bpe codes work on unicode strings.
+    This means you need a large # of unicode characters in your vocab if you want to avoid UNKs.
+    When you're at something like a 10B token dataset you end up needing around 5K for decent coverage.
+    This is a significant percentage of your normal, say, 32K bpe vocab.
+    To avoid that, we want lookup tables between utf-8 bytes and unicode strings.
+    And avoids mapping to whitespace/control characters the bpe code barfs on.
+    """
+    bs = list(range(ord("!"), ord("~")+1)) + list(range(ord("¡"), ord("¬")+1)) + list(range(ord("®"), ord("ÿ")+1))
+    cs = bs[:]
+    n = 0
+    for b in range(2**8):
+        if b not in bs:
+            bs.append(b)
+            cs.append(2**8 + n)
+            n += 1
+    cs = [chr(n) for n in cs]
+    return dict(zip(bs, cs))
+
+def convert_tokens_to_string(tokens_bytes: bytes) -> str:
+    """把 bytes 转换成 GPT-2 风格的 Unicode 字符串"""
+    byte_encoder = bytes_to_unicode()
+    return "".join([byte_encoder[b] for b in tokens_bytes])
+
+
 if __name__ == "__main__":
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
+    #     vocab_size=10000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
+    
     vocab, merged_pairs = train_bpe(
         input_path="./data/TinyStoriesV2-GPT4-valid.txt",
         vocab_size=500,
         special_tokens=["<|endoftext|>"],
     )
     
-    print(vocab)
+
+    # 1. 获取映射表
+    # 2. 创建一个新的字典，格式为 { "token_string": token_id }
+    #    你现在的 vocab 是 { token_id: token_bytes }
+    gpt2_style_vocab = {}
+    
+    for token_id, token_bytes in vocab.items():
+        # 将 bytes 转为带 Ġ 的字符串
+        token_str = convert_tokens_to_string(token_bytes)
+        gpt2_style_vocab[token_str] = token_id
+
+    # 3. 保存
+    with open("log/vocab.json", "w", encoding="utf-8") as f:
+        # 这里的 ensure_ascii=False 是关键，否则 Ġ 会被存成 \u0120
+        json.dump(gpt2_style_vocab, f, ensure_ascii=False, indent=2)
+
+    pretty_merges = []
+    for (p1, p2) in merged_pairs:
+        s1 = convert_tokens_to_string(p1)
+        s2 = convert_tokens_to_string(p2)
+        # 通常 merges.txt 存的是 "Ġ s", "t r" 这种空格分隔的形式
+        pretty_merges.append(f"{s1} {s2}")
+        
+    with open("log/merges.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(pretty_merges))
