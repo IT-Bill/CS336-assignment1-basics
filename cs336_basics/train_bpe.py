@@ -3,14 +3,11 @@ import mmap
 import json
 import functools
 import regex as re
-import multiprocessing as mp
 from tqdm import tqdm
 from typing import BinaryIO
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
-
-MM = None
-SPECIAL_TOKENS = None
 
 def _find_chunk_boundaries(
     file: BinaryIO,
@@ -64,11 +61,9 @@ def _remove_special_tokens(text: str, special_tokens: list[str]) -> list[str]:
 
 
 def _pre_tokenize(text: str, special_tokens: list[str]) -> dict[tuple[bytes, ...], int]:
-    PRE_TOKENIZER_RE = re.compile(
-        r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-    )
-    BYTE_TABLE: tuple[bytes, ...] = tuple(bytes((i,)) for i in range(256))
-    
+    PRE_TOKENIZER_RE = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+    BYTE_TABLE = tuple(bytes((i,)) for i in range(256))
+
     sub_chunks = _remove_special_tokens(text, special_tokens)
 
     token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
@@ -82,18 +77,16 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> dict[tuple[bytes, ...
     return token_count
 
 
-def _init_worker(path):
-    global MM
-    f = open(path, "rb", buffering=0)
-    MM = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+def _pre_tokenize_worker(
+    path: str | os.PathLike,
+    special_tokens: list[str],
+    start: int,
+    end: int,
+):
+    with open(path, "rb") as f:
+        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        return _pre_tokenize(mm[start:end].decode(), special_tokens)
 
-
-def _pre_tokenize_worker(args: tuple[int, int]):
-    global MM, SPECIAL_TOKENS
-    start, end = args
-    text = MM[start:end] # type: ignore
-    return _pre_tokenize(text.decode(), SPECIAL_TOKENS)  # type: ignore
-    
 
 def _merge(
     token_count: dict[tuple[bytes, ...], int], num_merges: int
@@ -110,19 +103,18 @@ def _merge(
 
         # Lexiographically greater pair
         most_common_pair, _ = max(nearby_count.items(), key=lambda c: (c[1], c[0]))
-        
+
         merged_pairs.append(most_common_pair)
 
         # Update token_count
         new_token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
 
         for bytes_tuple, count in token_count.items():
-            
             # Perf: Skip if each bytes of most_common_pair not in bytes_tuple
             if most_common_pair[0] not in bytes_tuple or most_common_pair[1] not in bytes_tuple:
                 new_token_count[bytes_tuple] = count
                 continue
-            
+
             new_bytes_list: list[bytes] = []
             num_bytes = len(bytes_tuple)
             i = 0
@@ -168,35 +160,26 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 64
+    num_processor = 32
     num_merges = vocab_size - 256 - len(special_tokens)
-    
-    global SPECIAL_TOKENS
-    SPECIAL_TOKENS = special_tokens
-    
+
     boundaries = None
 
     with open(input_path, "rb") as f:
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
 
-
-    # TODO: How to parallelize
-    # The following is a serial implementation, but you can parallelize this
-    # by sending each start/end pair to a set of processes.
     token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
 
-    with mp.Pool(
-        processes=num_processor,
-        initializer=_init_worker,
-        initargs=(input_path, ),
-        maxtasksperchild=200
-    ) as pool:
-        for count in tqdm(pool.imap_unordered(_pre_tokenize_worker, list(zip(boundaries[:-1], boundaries[1:])), chunksize=1)):
-            for k, v in count.items():
+    with ProcessPoolExecutor(num_processor) as ex:
+        futures = [
+            ex.submit(_pre_tokenize_worker, input_path, special_tokens, start, end)
+            for start, end in zip(boundaries[:-1], boundaries[1:])
+        ]
+        for future in tqdm(as_completed(futures), total=num_processor):
+            for k, v in future.result().items():
                 token_count[k] += v
-    
-    token_count, merged_pairs = _merge(token_count, num_merges)
 
+    token_count, merged_pairs = _merge(token_count, num_merges)
 
     vocab: dict[int, bytes] = {}
     vocab.update({i: i.to_bytes() for i in range(256)})
@@ -217,7 +200,7 @@ def bytes_to_unicode():
     To avoid that, we want lookup tables between utf-8 bytes and unicode strings.
     And avoids mapping to whitespace/control characters the bpe code barfs on.
     """
-    bs = list(range(ord("!"), ord("~")+1)) + list(range(ord("¡"), ord("¬")+1)) + list(range(ord("®"), ord("ÿ")+1))
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
     cs = bs[:]
     n = 0
     for b in range(2**8):
@@ -227,6 +210,7 @@ def bytes_to_unicode():
             n += 1
     cs = [chr(n) for n in cs]
     return dict(zip(bs, cs))
+
 
 def convert_tokens_to_string(tokens_bytes: bytes) -> str:
     """把 bytes 转换成 GPT-2 风格的 Unicode 字符串"""
@@ -240,25 +224,24 @@ if __name__ == "__main__":
         vocab_size=10000,
         special_tokens=["<|endoftext|>"],
     )
-    
+
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_train.txt",
     #     vocab_size=32000,
     #     special_tokens=["<|endoftext|>"],
     # )
-    
+
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/TinyStoriesV2-GPT4-valid.txt",
     #     vocab_size=500,
     #     special_tokens=["<|endoftext|>"],
     # )
-    
 
     # 1. 获取映射表
     # 2. 创建一个新的字典，格式为 { "token_string": token_id }
     #    你现在的 vocab 是 { token_id: token_bytes }
     gpt2_style_vocab = {}
-    
+
     for token_id, token_bytes in vocab.items():
         # 将 bytes 转为带 Ġ 的字符串
         token_str = convert_tokens_to_string(token_bytes)
@@ -270,11 +253,11 @@ if __name__ == "__main__":
         json.dump(gpt2_style_vocab, f, ensure_ascii=False, indent=2)
 
     pretty_merges = []
-    for (p1, p2) in merged_pairs:
+    for p1, p2 in merged_pairs:
         s1 = convert_tokens_to_string(p1)
         s2 = convert_tokens_to_string(p2)
         # 通常 merges.txt 存的是 "Ġ s", "t r" 这种空格分隔的形式
         pretty_merges.append(f"{s1} {s2}")
-        
+
     with open("log/merges.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(pretty_merges))
