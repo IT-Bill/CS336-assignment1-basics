@@ -1,10 +1,16 @@
 import os
+import mmap
 import json
 import functools
 import regex as re
+import multiprocessing as mp
 from tqdm import tqdm
 from typing import BinaryIO
 from collections import defaultdict
+
+
+MM = None
+SPECIAL_TOKENS = None
 
 def _find_chunk_boundaries(
     file: BinaryIO,
@@ -75,6 +81,19 @@ def _pre_tokenize(text: str, special_tokens: list[str]) -> dict[tuple[bytes, ...
 
     return token_count
 
+
+def _init_worker(path):
+    global MM
+    f = open(path, "rb", buffering=0)
+    MM = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+
+
+def _pre_tokenize_worker(args: tuple[int, int]):
+    global MM, SPECIAL_TOKENS
+    start, end = args
+    text = MM[start:end] # type: ignore
+    return _pre_tokenize(text.decode(), SPECIAL_TOKENS)  # type: ignore
+    
 
 def _merge(
     token_count: dict[tuple[bytes, ...], int], num_merges: int
@@ -149,26 +168,35 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 1
+    num_processor = 64
     num_merges = vocab_size - 256 - len(special_tokens)
+    
+    global SPECIAL_TOKENS
+    SPECIAL_TOKENS = special_tokens
+    
+    boundaries = None
 
     with open(input_path, "rb") as f:
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
 
-        # TODO: How to parallelize
-        # The following is a serial implementation, but you can parallelize this
-        # by sending each start/end pair to a set of processes.
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
-            f.seek(start)
-            chunk = f.read(end - start).decode("utf-8", errors="ignore")
 
-            token_count = _pre_tokenize(chunk, special_tokens)
+    # TODO: How to parallelize
+    # The following is a serial implementation, but you can parallelize this
+    # by sending each start/end pair to a set of processes.
+    token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
 
-            # print(token_count)
+    with mp.Pool(
+        processes=num_processor,
+        initializer=_init_worker,
+        initargs=(input_path, ),
+        maxtasksperchild=200
+    ) as pool:
+        for count in tqdm(pool.imap_unordered(_pre_tokenize_worker, list(zip(boundaries[:-1], boundaries[1:])), chunksize=1)):
+            for k, v in count.items():
+                token_count[k] += v
+    
+    token_count, merged_pairs = _merge(token_count, num_merges)
 
-            token_count, merged_pairs = _merge(token_count, num_merges)
-
-            # print(token_count)
 
     vocab: dict[int, bytes] = {}
     vocab.update({i: i.to_bytes() for i in range(256)})
@@ -207,17 +235,23 @@ def convert_tokens_to_string(tokens_bytes: bytes) -> str:
 
 
 if __name__ == "__main__":
+    vocab, merged_pairs = train_bpe(
+        input_path="./data/TinyStoriesV2-GPT4-train.txt",
+        vocab_size=10000,
+        special_tokens=["<|endoftext|>"],
+    )
+    
     # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
-    #     vocab_size=10000,
+    #     input_path="./data/owt_train.txt",
+    #     vocab_size=32000,
     #     special_tokens=["<|endoftext|>"],
     # )
     
-    vocab, merged_pairs = train_bpe(
-        input_path="./data/TinyStoriesV2-GPT4-valid.txt",
-        vocab_size=500,
-        special_tokens=["<|endoftext|>"],
-    )
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/TinyStoriesV2-GPT4-valid.txt",
+    #     vocab_size=500,
+    #     special_tokens=["<|endoftext|>"],
+    # )
     
 
     # 1. 获取映射表
