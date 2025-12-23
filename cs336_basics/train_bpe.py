@@ -89,12 +89,18 @@ def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[t
             return f"Token({(symbol_id_to_bytes[sym.id] for sym in symbols)}, {count})"
 
         __repr__ = __str__
+        
+    @dataclass(slots=True, order=False)
+    class RevBytes:
+        data: bytes
+        
+        def __lt__(self, other: "RevBytes"):
+            return self.data > other.data
 
-    def _rev_bytes(b: bytes) -> bytes:
-        return bytes(255 - x for x in b)
 
-    def _rev_pair(p: tuple[int, int]) -> tuple[bytes, bytes]:
-        return _rev_bytes(symbol_id_to_bytes[p[0]]), _rev_bytes(symbol_id_to_bytes[p[1]])
+    def _rev_pair(p: tuple[int, int]) -> tuple[RevBytes, RevBytes]:
+        return RevBytes(symbol_id_to_bytes[p[0]]), RevBytes(symbol_id_to_bytes[p[1]])
+
 
     # (A, B) -> (token_idx, sym_idx)
     pair_occurrences: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
@@ -122,7 +128,7 @@ def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[t
 
         token_list.append(Token(symbols, count))
 
-    pair_count_heap: list[tuple[int, tuple[bytes, bytes], tuple[int, int]]] = [
+    pair_count_heap: list[tuple[int, tuple[RevBytes, RevBytes], tuple[int, int]]] = [
         (-v, _rev_pair(k), k) for k, v in pair_count.items()
     ]
     heapq.heapify(pair_count_heap)
@@ -193,10 +199,12 @@ def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[t
                 # Increase (AB, R)
                 abr_id = (merged_symbol_id, r.id)
                 pair_count[abr_id] += token.count
-                pair_occurrences[abr_id].append((token_idx, b.index))
+                # ! Not b.index, but a.index
+                # pair_occurrences[abr_id].append((token_idx, b.index))
+                pair_occurrences[abr_id].append((token_idx, a.index))
                 heapq.heappush(pair_count_heap, (-pair_count[abr_id], _rev_pair(abr_id), abr_id))
 
-        pair_occurrences[pair] = [occurrences[i] for i in occ_keep_idxs]
+        pair_occurrences[most_common_pair] = [occurrences[i] for i in occ_keep_idxs]
 
         # Remove (A, B) from pair_count
         del pair_count[most_common_pair]
@@ -231,7 +239,7 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 1
+    num_processor = 32
     num_merges = vocab_size - 256 - len(special_tokens)
 
     boundaries = None
@@ -290,11 +298,11 @@ def convert_tokens_to_string(tokens_bytes: bytes) -> str:
 
 
 if __name__ == "__main__":
-    vocab, merged_pairs = train_bpe(
-        input_path="./data/tiny.txt",
-        vocab_size=280,
-        special_tokens=["<|endoftext|>"],
-    )
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/tiny.txt",
+    #     vocab_size=262,
+    #     special_tokens=["<|endoftext|>"],
+    # )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
@@ -302,11 +310,11 @@ if __name__ == "__main__":
     #     special_tokens=["<|endoftext|>"],
     # )
 
-    # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/owt_train.txt",
-    #     vocab_size=32000,
-    #     special_tokens=["<|endoftext|>"],
-    # )
+    vocab, merged_pairs = train_bpe(
+        input_path="./data/owt_train.txt",
+        vocab_size=32000,
+        special_tokens=["<|endoftext|>"],
+    )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_valid.txt",
