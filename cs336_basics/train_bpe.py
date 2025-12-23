@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import os
 import json
 import heapq
@@ -58,29 +59,80 @@ def _find_chunk_boundaries(
 
 
 def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[tuple[bytes, bytes]]:
-    def _rev_bytes(b: bytes):
-        return bytes(255 - x for x in b)
+    # symbol id -> bytes
+    symbol_id_to_bytes: dict[int, bytes] = {i: bytes((i,)) for i in range(256)}
 
     merged_pairs: list[tuple[bytes, bytes]] = []
 
-    pair_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
+    @dataclass
+    class Symbol:
+        id: int
+        index: int
+        alive: bool
+        prev: "Symbol | None" = None
+        next: "Symbol | None" = None
 
-    for bytes_tuple, count in token_count.items():
-        for i in range(len(bytes_tuple) - 1):
-            pair_count[(bytes_tuple[i], bytes_tuple[i + 1])] += count
+        def __str__(self) -> str:
+            symbol_bytes = symbol_id_to_bytes[self.id]
+            prev_bytes = symbol_id_to_bytes[self.prev.id] if self.prev else None
+            next_bytes = symbol_id_to_bytes[self.next.id] if self.next else None
+            return f"Symbol({symbol_bytes}, {self.alive}, {prev_bytes}, {next_bytes})"
 
-    common_pair_heap: list[tuple[int, tuple[bytes, bytes], tuple[bytes, bytes]]] = [
-        (-v, (_rev_bytes(k[0]), _rev_bytes(k[1])), k) for k, v in pair_count.items()
+        __repr__ = __str__
+    
+    @dataclass
+    class Token:
+        symbols: list[Symbol]
+        count: int
+        
+        def __str__(self) -> str:
+            return f"Token({(symbol_id_to_bytes[sym.id] for sym in symbols)}, {count})"
+
+        __repr__ = __str__
+
+    def _rev_bytes(b: bytes) -> bytes:
+        return bytes(255 - x for x in b)
+
+    def _rev_pair(p: tuple[int, int]) -> tuple[bytes, bytes]:
+        return _rev_bytes(symbol_id_to_bytes[p[0]]), _rev_bytes(symbol_id_to_bytes[p[1]])
+
+    # (A, B) -> (token_idx, sym_idx)
+    pair_occurrences: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    # (A, B) -> count
+    pair_count: dict[tuple[int, int], int] = defaultdict(int)
+    # (token_idx, sym_idx) -> sym
+    token_list: list[Token] = []
+
+    for token_idx, (init_symbols, count) in enumerate(token_count.items()):
+        length = len(init_symbols)
+        symbols: list[Symbol] = []
+        for sym_idx in range(length):
+            init_symbol = init_symbols[sym_idx][0]
+            symbols.append(Symbol(init_symbol, sym_idx, True))
+
+            if sym_idx + 1 < length:
+                pair = (init_symbol, init_symbols[sym_idx + 1][0])
+                pair_occurrences[pair].append((token_idx, sym_idx))
+                pair_count[pair] += count
+
+        # TODO: optimize
+        for sym_idx in range(length - 1):
+            symbols[sym_idx].next = symbols[sym_idx + 1]
+            symbols[sym_idx + 1].prev = symbols[sym_idx]
+
+        token_list.append(Token(symbols, count))
+
+    pair_count_heap: list[tuple[int, tuple[bytes, bytes], tuple[int, int]]] = [
+        (-v, _rev_pair(k), k) for k, v in pair_count.items()
     ]
-    heapq.heapify(common_pair_heap)
+    heapq.heapify(pair_count_heap)
 
-    # Number of merges
     for _ in tqdm(range(num_merges)):
         most_common_pair = None
 
-        while common_pair_heap:
+        while pair_count_heap:
             # Lexiographically greater pair
-            neg, _, most_common_pair = heapq.heappop(common_pair_heap)
+            neg, _, most_common_pair = heapq.heappop(pair_count_heap)
 
             # Check whether it is outdated
             if pair_count.get(most_common_pair, 0) == -neg:
@@ -90,35 +142,64 @@ def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[t
         if most_common_pair is None:
             break
 
-        # (A, B)
-        merged_pairs.append(most_common_pair)
+        merged_symbol_id = len(symbol_id_to_bytes)
 
-        # AB
-        most_common_bytes = most_common_pair[0] + most_common_pair[1]
+        # Add new pair to symbol_id_to_bytes and merged_pairs
+        sym_a_id, sym_b_id = most_common_pair
+        symbol_id_to_bytes[merged_symbol_id] = symbol_id_to_bytes[sym_a_id] + symbol_id_to_bytes[sym_b_id]
+        merged_pairs.append((symbol_id_to_bytes[sym_a_id], symbol_id_to_bytes[sym_b_id]))
 
-        # Remove merged pair
-        del pair_count[most_common_pair]
+        occurrences = pair_occurrences[most_common_pair]
+        occ_keep_idxs: list[int] = []
 
-        for pair in list(pair_count.keys()):
-            new_pair = None
-
-            # L = pair[0], A = pair[1] = most_common_pair[0]
-            # {L, A} -> {L, AB}
-            if pair[1] == most_common_pair[0]:
-                new_pair = (pair[0], most_common_bytes)
-
-            # B = pair[0] = most_common_pair[1], R = pair[1]
-            # {B, R} -> {AB, R}
-            elif pair[0] == most_common_pair[1]:
-                new_pair = (most_common_bytes, pair[1])
-
-            if new_pair is None:
+        for occ_idx, (token_idx, sym_idx) in enumerate(occurrences):
+            token = token_list[token_idx]
+            a = token.symbols[sym_idx]
+            b = a.next
+            if not a.alive or (b is None or not b.alive) or b.id != sym_b_id:
+                # Not (A, B)
                 continue
 
-            # Update key and heap
-            count = pair_count.pop(pair)
-            pair_count[new_pair] = count
-            heapq.heappush(common_pair_heap, (-count, (_rev_bytes(new_pair[0]), _rev_bytes(new_pair[1])), new_pair))
+            occ_keep_idxs.append(occ_idx)
+
+            # Update symbol A to symbol AB
+            a.id = merged_symbol_id
+            # Skip b, remember this is double-link list
+            a.next = b.next  
+            if b.next:
+                b.next.prev = a
+            b.alive = False
+
+            l, r = a.prev, b.next  # noqa: E741
+
+            if l is not None:
+                # Decrease (L, A)
+                la_id = (l.id, sym_a_id)
+                pair_count[la_id] -= token.count
+                heapq.heappush(pair_count_heap, (-pair_count[la_id], _rev_pair(la_id), la_id))
+
+                # Increase (L, AB)
+                lab_id = (l.id, merged_symbol_id)
+                pair_count[lab_id] += token.count
+                pair_occurrences[lab_id].append((token_idx, l.index))
+                heapq.heappush(pair_count_heap, (-pair_count[lab_id], _rev_pair(lab_id), lab_id))
+                
+            if r is not None:
+                # Decrease (B, R)
+                br_id = (b.id, r.id)
+                pair_count[br_id] -= token.count
+                heapq.heappush(pair_count_heap, (-pair_count[br_id], _rev_pair(br_id), br_id))
+
+                # Increase (AB, R)
+                abr_id = (merged_symbol_id, r.id)
+                pair_count[abr_id] += token.count
+                pair_occurrences[abr_id].append((token_idx, b.index))
+                heapq.heappush(pair_count_heap, (-pair_count[abr_id], _rev_pair(abr_id), abr_id))
+
+        pair_occurrences[pair] = [occurrences[i] for i in occ_keep_idxs]
+
+        # Remove (A, B) from pair_count
+        del pair_count[most_common_pair]
 
     return merged_pairs
 
@@ -211,7 +292,7 @@ def convert_tokens_to_string(tokens_bytes: bytes) -> str:
 if __name__ == "__main__":
     vocab, merged_pairs = train_bpe(
         input_path="./data/tiny.txt",
-        vocab_size=263,
+        vocab_size=280,
         special_tokens=["<|endoftext|>"],
     )
 
