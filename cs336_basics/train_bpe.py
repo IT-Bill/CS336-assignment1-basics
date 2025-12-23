@@ -1,5 +1,6 @@
 import os
 import json
+import heapq
 import functools
 from tqdm import tqdm
 from typing import BinaryIO
@@ -56,50 +57,70 @@ def _find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
+def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[tuple[bytes, bytes]]:
+    def _rev_bytes(b: bytes):
+        return bytes(255 - x for x in b)
 
-def _merge(
-    token_count: dict[tuple[bytes, ...], int], num_merges: int
-) -> tuple[dict[tuple[bytes, ...], int], list[tuple[bytes, bytes]]]:
     merged_pairs: list[tuple[bytes, bytes]] = []
+
+    pair_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
+
+    for bytes_tuple, count in token_count.items():
+        for i in range(len(bytes_tuple) - 1):
+            pair_count[(bytes_tuple[i], bytes_tuple[i + 1])] += count
+
+    common_pair_heap: list[tuple[int, tuple[bytes, bytes], tuple[bytes, bytes]]] = [
+        (-v, (_rev_bytes(k[0]), _rev_bytes(k[1])), k) for k, v in pair_count.items()
+    ]
+    heapq.heapify(common_pair_heap)
 
     # Number of merges
     for _ in tqdm(range(num_merges)):
-        nearby_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
+        most_common_pair = None
 
-        for bytes_tuple, count in token_count.items():
-            for i in range(len(bytes_tuple) - 1):
-                nearby_count[(bytes_tuple[i], bytes_tuple[i + 1])] += count
+        while common_pair_heap:
+            # Lexiographically greater pair
+            neg, _, most_common_pair = heapq.heappop(common_pair_heap)
 
-        # Lexiographically greater pair
-        most_common_pair, _ = max(nearby_count.items(), key=lambda c: (c[1], c[0]))
+            # Check whether it is outdated
+            if pair_count.get(most_common_pair, 0) == -neg:
+                break  # Current most_common_pair is valid
+            # Otherwise, invalid
 
+        if most_common_pair is None:
+            break
+
+        # (A, B)
         merged_pairs.append(most_common_pair)
 
-        # Update token_count
-        new_token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
+        # AB
+        most_common_bytes = most_common_pair[0] + most_common_pair[1]
 
-        for bytes_tuple, count in token_count.items():
-            # Perf: Skip if each bytes of most_common_pair not in bytes_tuple
-            if most_common_pair[0] not in bytes_tuple or most_common_pair[1] not in bytes_tuple:
-                new_token_count[bytes_tuple] = count
+        # Remove merged pair
+        del pair_count[most_common_pair]
+
+        for pair in list(pair_count.keys()):
+            new_pair = None
+
+            # L = pair[0], A = pair[1] = most_common_pair[0]
+            # {L, A} -> {L, AB}
+            if pair[1] == most_common_pair[0]:
+                new_pair = (pair[0], most_common_bytes)
+
+            # B = pair[0] = most_common_pair[1], R = pair[1]
+            # {B, R} -> {AB, R}
+            elif pair[0] == most_common_pair[1]:
+                new_pair = (most_common_bytes, pair[1])
+
+            if new_pair is None:
                 continue
 
-            new_bytes_list: list[bytes] = []
-            num_bytes = len(bytes_tuple)
-            i = 0
-            while i < num_bytes:
-                if i + 1 < num_bytes and (bytes_tuple[i], bytes_tuple[i + 1]) == most_common_pair:
-                    new_bytes_list.append(bytes_tuple[i] + bytes_tuple[i + 1])
-                    i += 2
-                else:
-                    new_bytes_list.append(bytes_tuple[i])
-                    i += 1
+            # Update key and heap
+            count = pair_count.pop(pair)
+            pair_count[new_pair] = count
+            heapq.heappush(common_pair_heap, (-count, (_rev_bytes(new_pair[0]), _rev_bytes(new_pair[1])), new_pair))
 
-            new_token_count[tuple(new_bytes_list)] = count
-
-        token_count = new_token_count
-
-    return token_count, merged_pairs
+    return merged_pairs
 
 
 def train_bpe(
@@ -129,7 +150,7 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 32
+    num_processor = 1
     num_merges = vocab_size - 256 - len(special_tokens)
 
     boundaries = None
@@ -148,7 +169,7 @@ def train_bpe(
             for k, v in future.result().items():
                 token_count[k] += v
 
-    token_count, merged_pairs = _merge(token_count, num_merges)
+    merged_pairs = _merge(token_count, num_merges)
 
     vocab: dict[int, bytes] = {}
     vocab.update({i: i.to_bytes() for i in range(256)})
@@ -188,6 +209,12 @@ def convert_tokens_to_string(tokens_bytes: bytes) -> str:
 
 
 if __name__ == "__main__":
+    vocab, merged_pairs = train_bpe(
+        input_path="./data/tiny.txt",
+        vocab_size=263,
+        special_tokens=["<|endoftext|>"],
+    )
+
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
     #     vocab_size=10000,
@@ -200,11 +227,11 @@ if __name__ == "__main__":
     #     special_tokens=["<|endoftext|>"],
     # )
 
-    vocab, merged_pairs = train_bpe(
-        input_path="./data/TinyStoriesV2-GPT4-valid.txt",
-        vocab_size=500,
-        special_tokens=["<|endoftext|>"],
-    )
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/owt_valid.txt",
+    #     vocab_size=1000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
 
     # 1. 获取映射表
     # 2. 创建一个新的字典，格式为 { "token_string": token_id }
