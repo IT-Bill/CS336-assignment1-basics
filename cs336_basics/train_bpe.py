@@ -58,7 +58,7 @@ def _find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[tuple[bytes, bytes]]:
+def _merge(token_count: dict[tuple[int, ...], int], num_merges: int) -> list[tuple[bytes, bytes]]:
     # symbol id -> bytes
     symbol_id_to_bytes: dict[int, bytes] = {i: bytes((i,)) for i in range(256)}
 
@@ -109,15 +109,15 @@ def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[t
     # (token_idx, sym_idx) -> sym
     token_list: list[Token] = []
 
-    for token_idx, (init_symbols, count) in enumerate(token_count.items()):
-        length = len(init_symbols)
+    for token_idx, (sym_ids, count) in enumerate(token_count.items()):
+        length = len(sym_ids)
         symbols: list[Symbol] = []
         for sym_idx in range(length):
-            init_symbol = init_symbols[sym_idx][0]
-            symbols.append(Symbol(init_symbol, sym_idx, True))
+            sym_id = sym_ids[sym_idx]
+            symbols.append(Symbol(sym_id, sym_idx, True))
 
             if sym_idx + 1 < length:
-                pair = (init_symbol, init_symbols[sym_idx + 1][0])
+                pair = (sym_id, sym_ids[sym_idx + 1])
                 pair_occurrences[pair].append((token_idx, sym_idx))
                 pair_count[pair] += count
 
@@ -247,7 +247,7 @@ def train_bpe(
     with open(input_path, "rb") as f:
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
 
-    token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
+    token_count: dict[tuple[int, ...], int] = defaultdict(int)
 
     with ProcessPoolExecutor(num_processor) as ex:
         futures = [
