@@ -9,7 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from cs336_basics.pre_tokenize import pre_tokenize_worker
-from cs336_basics.rust_lib import pre_tokenize
+from cs336_basics import rust_lib
 
 
 def _find_chunk_boundaries(
@@ -80,28 +80,26 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
             return f"Symbol({symbol_bytes}, {self.alive}, {prev_bytes}, {next_bytes})"
 
         __repr__ = __str__
-    
+
     @dataclass
     class Token:
         symbols: list[Symbol]
         count: int
-        
+
         def __str__(self) -> str:
             return f"Token({(symbol_id_to_bytes[sym.id] for sym in symbols)}, {count})"
 
         __repr__ = __str__
-        
+
     @dataclass(slots=True, order=False)
     class RevBytes:
         data: bytes
-        
+
         def __lt__(self, other: "RevBytes"):
             return self.data > other.data
 
-
     def _rev_pair(p: tuple[int, int]) -> tuple[RevBytes, RevBytes]:
         return RevBytes(symbol_id_to_bytes[p[0]]), RevBytes(symbol_id_to_bytes[p[1]])
-
 
     # (A, B) -> (token_idx, sym_idx)
     pair_occurrences: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
@@ -172,7 +170,7 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
             # Update symbol A to symbol AB
             a.id = merged_symbol_id
             # Skip b, remember this is double-link list
-            a.next = b.next  
+            a.next = b.next
             if b.next:
                 b.next.prev = a
             b.alive = False
@@ -190,7 +188,7 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
                 pair_count[lab_id] += token.count
                 pair_occurrences[lab_id].append((token_idx, l.index))
                 heapq.heappush(pair_count_heap, (-pair_count[lab_id], _rev_pair(lab_id), lab_id))
-                
+
             if r is not None:
                 # Decrease (B, R)
                 br_id = (b.id, r.id)
@@ -240,7 +238,7 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 1
+    num_processor = 32
     num_merges = vocab_size - 256 - len(special_tokens)
 
     boundaries = None
@@ -249,18 +247,23 @@ def train_bpe(
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
 
     # token_count: dict[bytes, int] = defaultdict(int)
-    
+
     # with ProcessPoolExecutor(num_processor) as ex:
     #     futures = [
     #         ex.submit(pre_tokenize_worker, input_path, special_tokens, start, end)
     #         for start, end in zip(boundaries[:-1], boundaries[1:])
     #     ]
-        
+
     #     for future in tqdm(as_completed(futures), total=num_processor):
     #         for k, v in future.result().items():
     #             token_count[k] += v
-    
-    token_count = pre_tokenize(input_path, special_tokens, list(zip(boundaries[:-1], boundaries[1:])))
+
+    token_count = rust_lib.pre_tokenize(
+        path=input_path,
+        special_tokens=special_tokens,
+        boundaries=list(zip(boundaries[:-1], boundaries[1:])),
+        num_threads=num_processor,
+    )
 
     merged_pairs = _merge(token_count, num_merges)
 
@@ -308,17 +311,17 @@ if __name__ == "__main__":
     #     special_tokens=["<|endoftext|>"],
     # )
 
-    # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
-    #     vocab_size=10000,
-    #     special_tokens=["<|endoftext|>"],
-    # )
-
     vocab, merged_pairs = train_bpe(
-        input_path="./data/owt_train.txt",
-        vocab_size=32000,
+        input_path="./data/TinyStoriesV2-GPT4-train.txt",
+        vocab_size=10000,
         special_tokens=["<|endoftext|>"],
     )
+
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/owt_train.txt",
+    #     vocab_size=32000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_valid.txt",
