@@ -9,6 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from cs336_basics.pre_tokenize import pre_tokenize_worker
+from cs336_basics.rust_lib import pre_tokenize
 
 
 def _find_chunk_boundaries(
@@ -58,7 +59,7 @@ def _find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def _merge(token_count: dict[tuple[int, ...], int], num_merges: int) -> list[tuple[bytes, bytes]]:
+def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, bytes]]:
     # symbol id -> bytes
     symbol_id_to_bytes: dict[int, bytes] = {i: bytes((i,)) for i in range(256)}
 
@@ -239,7 +240,7 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 32
+    num_processor = 1
     num_merges = vocab_size - 256 - len(special_tokens)
 
     boundaries = None
@@ -247,16 +248,19 @@ def train_bpe(
     with open(input_path, "rb") as f:
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
 
-    token_count: dict[tuple[int, ...], int] = defaultdict(int)
-
-    with ProcessPoolExecutor(num_processor) as ex:
-        futures = [
-            ex.submit(pre_tokenize_worker, input_path, special_tokens, start, end)
-            for start, end in zip(boundaries[:-1], boundaries[1:])
-        ]
-        for future in tqdm(as_completed(futures), total=num_processor):
-            for k, v in future.result().items():
-                token_count[k] += v
+    # token_count: dict[bytes, int] = defaultdict(int)
+    
+    # with ProcessPoolExecutor(num_processor) as ex:
+    #     futures = [
+    #         ex.submit(pre_tokenize_worker, input_path, special_tokens, start, end)
+    #         for start, end in zip(boundaries[:-1], boundaries[1:])
+    #     ]
+        
+    #     for future in tqdm(as_completed(futures), total=num_processor):
+    #         for k, v in future.result().items():
+    #             token_count[k] += v
+    
+    token_count = pre_tokenize(input_path, special_tokens, list(zip(boundaries[:-1], boundaries[1:])))
 
     merged_pairs = _merge(token_count, num_merges)
 

@@ -20,18 +20,23 @@ dependencies = [
     "wandb>=0.19.7",
     "ty>=0.0.1a16",
 ]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
 
 [build-system]
-requires = ["uv_build>=0.8.3,<0.9.0"]
-build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-name = "cs336_basics"
-module-root = ""
+requires = ["maturin>=1.10,<2.0"]
+build-backend = "maturin"
 
 [tool.uv]
 package = true
 python-preference = "managed"
+
+[tool.maturin]
+python-source = "."
+module-name = "cs336_basics.rust_lib"
 
 [tool.pytest.ini_options]
 log_cli = true
