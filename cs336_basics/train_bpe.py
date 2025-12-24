@@ -1,12 +1,14 @@
+from dataclasses import dataclass
 import os
-import mmap
 import json
+import heapq
 import functools
-import regex as re
 from tqdm import tqdm
 from typing import BinaryIO
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from cs336_basics.pre_tokenize import pre_tokenize_worker
 
 
 def _find_chunk_boundaries(
@@ -56,81 +58,158 @@ def _find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def _remove_special_tokens(text: str, special_tokens: list[str]) -> list[str]:
-    return [s for s in re.split("|".join([re.escape(t) for t in special_tokens]), text) if s]
+def _merge(token_count: dict[tuple[bytes, ...], int], num_merges: int) -> list[tuple[bytes, bytes]]:
+    # symbol id -> bytes
+    symbol_id_to_bytes: dict[int, bytes] = {i: bytes((i,)) for i in range(256)}
 
-
-def _pre_tokenize(text: str, special_tokens: list[str]) -> dict[tuple[bytes, ...], int]:
-    PRE_TOKENIZER_RE = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
-    BYTE_TABLE = tuple(bytes((i,)) for i in range(256))
-
-    sub_chunks = _remove_special_tokens(text, special_tokens)
-
-    token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
-
-    for sub_chunk in sub_chunks:
-        # Run pre-tokenization on your chunk and store the counts for each pre-token
-        for m in PRE_TOKENIZER_RE.finditer(sub_chunk):
-            # token_count[tuple(BYTE_TABLE[b] for b in m.group().encode())] += 1
-            token_count[tuple(map(BYTE_TABLE.__getitem__, m.group().encode()))] += 1
-
-    return token_count
-
-
-def _pre_tokenize_worker(
-    path: str | os.PathLike,
-    special_tokens: list[str],
-    start: int,
-    end: int,
-):
-    with open(path, "rb") as f:
-        mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-        return _pre_tokenize(mm[start:end].decode(), special_tokens)
-
-
-def _merge(
-    token_count: dict[tuple[bytes, ...], int], num_merges: int
-) -> tuple[dict[tuple[bytes, ...], int], list[tuple[bytes, bytes]]]:
     merged_pairs: list[tuple[bytes, bytes]] = []
 
-    # Number of merges
+    @dataclass
+    class Symbol:
+        id: int
+        index: int
+        alive: bool
+        prev: "Symbol | None" = None
+        next: "Symbol | None" = None
+
+        def __str__(self) -> str:
+            symbol_bytes = symbol_id_to_bytes[self.id]
+            prev_bytes = symbol_id_to_bytes[self.prev.id] if self.prev else None
+            next_bytes = symbol_id_to_bytes[self.next.id] if self.next else None
+            return f"Symbol({symbol_bytes}, {self.alive}, {prev_bytes}, {next_bytes})"
+
+        __repr__ = __str__
+    
+    @dataclass
+    class Token:
+        symbols: list[Symbol]
+        count: int
+        
+        def __str__(self) -> str:
+            return f"Token({(symbol_id_to_bytes[sym.id] for sym in symbols)}, {count})"
+
+        __repr__ = __str__
+        
+    @dataclass(slots=True, order=False)
+    class RevBytes:
+        data: bytes
+        
+        def __lt__(self, other: "RevBytes"):
+            return self.data > other.data
+
+
+    def _rev_pair(p: tuple[int, int]) -> tuple[RevBytes, RevBytes]:
+        return RevBytes(symbol_id_to_bytes[p[0]]), RevBytes(symbol_id_to_bytes[p[1]])
+
+
+    # (A, B) -> (token_idx, sym_idx)
+    pair_occurrences: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    # (A, B) -> count
+    pair_count: dict[tuple[int, int], int] = defaultdict(int)
+    # (token_idx, sym_idx) -> sym
+    token_list: list[Token] = []
+
+    for token_idx, (init_symbols, count) in enumerate(token_count.items()):
+        length = len(init_symbols)
+        symbols: list[Symbol] = []
+        for sym_idx in range(length):
+            init_symbol = init_symbols[sym_idx][0]
+            symbols.append(Symbol(init_symbol, sym_idx, True))
+
+            if sym_idx + 1 < length:
+                pair = (init_symbol, init_symbols[sym_idx + 1][0])
+                pair_occurrences[pair].append((token_idx, sym_idx))
+                pair_count[pair] += count
+
+        # TODO: optimize
+        for sym_idx in range(length - 1):
+            symbols[sym_idx].next = symbols[sym_idx + 1]
+            symbols[sym_idx + 1].prev = symbols[sym_idx]
+
+        token_list.append(Token(symbols, count))
+
+    pair_count_heap: list[tuple[int, tuple[RevBytes, RevBytes], tuple[int, int]]] = [
+        (-v, _rev_pair(k), k) for k, v in pair_count.items()
+    ]
+    heapq.heapify(pair_count_heap)
+
     for _ in tqdm(range(num_merges)):
-        nearby_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
+        most_common_pair = None
 
-        for bytes_tuple, count in token_count.items():
-            for i in range(len(bytes_tuple) - 1):
-                nearby_count[(bytes_tuple[i], bytes_tuple[i + 1])] += count
+        while pair_count_heap:
+            # Lexiographically greater pair
+            neg, _, most_common_pair = heapq.heappop(pair_count_heap)
 
-        # Lexiographically greater pair
-        most_common_pair, _ = max(nearby_count.items(), key=lambda c: (c[1], c[0]))
+            # Check whether it is outdated
+            if pair_count.get(most_common_pair, 0) == -neg:
+                break  # Current most_common_pair is valid
+            # Otherwise, invalid
 
-        merged_pairs.append(most_common_pair)
+        if most_common_pair is None:
+            break
 
-        # Update token_count
-        new_token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
+        merged_symbol_id = len(symbol_id_to_bytes)
 
-        for bytes_tuple, count in token_count.items():
-            # Perf: Skip if each bytes of most_common_pair not in bytes_tuple
-            if most_common_pair[0] not in bytes_tuple or most_common_pair[1] not in bytes_tuple:
-                new_token_count[bytes_tuple] = count
+        # Add new pair to symbol_id_to_bytes and merged_pairs
+        sym_a_id, sym_b_id = most_common_pair
+        symbol_id_to_bytes[merged_symbol_id] = symbol_id_to_bytes[sym_a_id] + symbol_id_to_bytes[sym_b_id]
+        merged_pairs.append((symbol_id_to_bytes[sym_a_id], symbol_id_to_bytes[sym_b_id]))
+
+        occurrences = pair_occurrences[most_common_pair]
+        occ_keep_idxs: list[int] = []
+
+        for occ_idx, (token_idx, sym_idx) in enumerate(occurrences):
+            token = token_list[token_idx]
+            a = token.symbols[sym_idx]
+            b = a.next
+            if not a.alive or (b is None or not b.alive) or b.id != sym_b_id:
+                # Not (A, B)
                 continue
 
-            new_bytes_list: list[bytes] = []
-            num_bytes = len(bytes_tuple)
-            i = 0
-            while i < num_bytes:
-                if i + 1 < num_bytes and (bytes_tuple[i], bytes_tuple[i + 1]) == most_common_pair:
-                    new_bytes_list.append(bytes_tuple[i] + bytes_tuple[i + 1])
-                    i += 2
-                else:
-                    new_bytes_list.append(bytes_tuple[i])
-                    i += 1
+            occ_keep_idxs.append(occ_idx)
 
-            new_token_count[tuple(new_bytes_list)] = count
+            # Update symbol A to symbol AB
+            a.id = merged_symbol_id
+            # Skip b, remember this is double-link list
+            a.next = b.next  
+            if b.next:
+                b.next.prev = a
+            b.alive = False
 
-        token_count = new_token_count
+            l, r = a.prev, b.next  # noqa: E741
 
-    return token_count, merged_pairs
+            if l is not None:
+                # Decrease (L, A)
+                la_id = (l.id, sym_a_id)
+                pair_count[la_id] -= token.count
+                heapq.heappush(pair_count_heap, (-pair_count[la_id], _rev_pair(la_id), la_id))
+
+                # Increase (L, AB)
+                lab_id = (l.id, merged_symbol_id)
+                pair_count[lab_id] += token.count
+                pair_occurrences[lab_id].append((token_idx, l.index))
+                heapq.heappush(pair_count_heap, (-pair_count[lab_id], _rev_pair(lab_id), lab_id))
+                
+            if r is not None:
+                # Decrease (B, R)
+                br_id = (b.id, r.id)
+                pair_count[br_id] -= token.count
+                heapq.heappush(pair_count_heap, (-pair_count[br_id], _rev_pair(br_id), br_id))
+
+                # Increase (AB, R)
+                abr_id = (merged_symbol_id, r.id)
+                pair_count[abr_id] += token.count
+                # ! Not b.index, but a.index
+                # pair_occurrences[abr_id].append((token_idx, b.index))
+                pair_occurrences[abr_id].append((token_idx, a.index))
+                heapq.heappush(pair_count_heap, (-pair_count[abr_id], _rev_pair(abr_id), abr_id))
+
+        pair_occurrences[most_common_pair] = [occurrences[i] for i in occ_keep_idxs]
+
+        # Remove (A, B) from pair_count
+        del pair_count[most_common_pair]
+
+    return merged_pairs
 
 
 def train_bpe(
@@ -172,14 +251,14 @@ def train_bpe(
 
     with ProcessPoolExecutor(num_processor) as ex:
         futures = [
-            ex.submit(_pre_tokenize_worker, input_path, special_tokens, start, end)
+            ex.submit(pre_tokenize_worker, input_path, special_tokens, start, end)
             for start, end in zip(boundaries[:-1], boundaries[1:])
         ]
         for future in tqdm(as_completed(futures), total=num_processor):
             for k, v in future.result().items():
                 token_count[k] += v
 
-    token_count, merged_pairs = _merge(token_count, num_merges)
+    merged_pairs = _merge(token_count, num_merges)
 
     vocab: dict[int, bytes] = {}
     vocab.update({i: i.to_bytes() for i in range(256)})
@@ -219,21 +298,27 @@ def convert_tokens_to_string(tokens_bytes: bytes) -> str:
 
 
 if __name__ == "__main__":
-    vocab, merged_pairs = train_bpe(
-        input_path="./data/TinyStoriesV2-GPT4-train.txt",
-        vocab_size=10000,
-        special_tokens=["<|endoftext|>"],
-    )
-
     # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/owt_train.txt",
-    #     vocab_size=32000,
+    #     input_path="./data/tiny.txt",
+    #     vocab_size=262,
     #     special_tokens=["<|endoftext|>"],
     # )
 
     # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/TinyStoriesV2-GPT4-valid.txt",
-    #     vocab_size=500,
+    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
+    #     vocab_size=10000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
+
+    vocab, merged_pairs = train_bpe(
+        input_path="./data/owt_train.txt",
+        vocab_size=32000,
+        special_tokens=["<|endoftext|>"],
+    )
+
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/owt_valid.txt",
+    #     vocab_size=1000,
     #     special_tokens=["<|endoftext|>"],
     # )
 
