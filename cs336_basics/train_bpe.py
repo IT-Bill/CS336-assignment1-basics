@@ -6,9 +6,6 @@ import functools
 from tqdm import tqdm
 from typing import BinaryIO
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-from cs336_basics.pre_tokenize import pre_tokenize_worker
 from cs336_basics import rust_lib
 
 
@@ -245,18 +242,6 @@ def train_bpe(
 
     with open(input_path, "rb") as f:
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
-
-    # token_count: dict[bytes, int] = defaultdict(int)
-
-    # with ProcessPoolExecutor(num_processor) as ex:
-    #     futures = [
-    #         ex.submit(pre_tokenize_worker, input_path, special_tokens, start, end)
-    #         for start, end in zip(boundaries[:-1], boundaries[1:])
-    #     ]
-
-    #     for future in tqdm(as_completed(futures), total=num_processor):
-    #         for k, v in future.result().items():
-    #             token_count[k] += v
 
     token_count = rust_lib.pre_tokenize(
         path=input_path,
