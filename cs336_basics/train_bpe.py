@@ -243,14 +243,14 @@ def train_bpe(
     with open(input_path, "rb") as f:
         boundaries = _find_chunk_boundaries(f, num_processor, b"<|endoftext|>")
 
-    token_count = rust_lib.pre_tokenize(
+    token_count = rust_lib.bpe.pre_tokenize(
         path=input_path,
         special_tokens=special_tokens,
         boundaries=list(zip(boundaries[:-1], boundaries[1:])),
         num_threads=num_processor,
     )
 
-    merged_pairs = rust_lib.merge(token_count, num_merges)
+    merged_pairs = rust_lib.bpe.merge(token_count, num_merges)
 
     vocab: dict[int, bytes] = {}
     vocab.update({i: i.to_bytes() for i in range(256)})
@@ -296,17 +296,17 @@ if __name__ == "__main__":
     #     special_tokens=["<|endoftext|>"],
     # )
 
-    # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
-    #     vocab_size=10000,
-    #     special_tokens=["<|endoftext|>"],
-    # )
-
     vocab, merged_pairs = train_bpe(
-        input_path="./data/owt_train.txt",
-        vocab_size=32000,
+        input_path="./data/TinyStoriesV2-GPT4-train.txt",
+        vocab_size=10000,
         special_tokens=["<|endoftext|>"],
     )
+
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/owt_train.txt",
+    #     vocab_size=32000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_valid.txt",
