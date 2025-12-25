@@ -58,7 +58,7 @@ def _find_chunk_boundaries(
 
 def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, bytes]]:
     # symbol id -> bytes
-    symbol_id_to_bytes: dict[int, bytes] = {i: bytes((i,)) for i in range(256)}
+    symbol_bytes: list[bytes] = [bytes((i,)) for i in range(256)]
 
     merged_pairs: list[tuple[bytes, bytes]] = []
 
@@ -71,10 +71,10 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
         next: "Symbol | None" = None
 
         def __str__(self) -> str:
-            symbol_bytes = symbol_id_to_bytes[self.id]
-            prev_bytes = symbol_id_to_bytes[self.prev.id] if self.prev else None
-            next_bytes = symbol_id_to_bytes[self.next.id] if self.next else None
-            return f"Symbol({symbol_bytes}, {self.alive}, {prev_bytes}, {next_bytes})"
+            current_bytes = symbol_bytes[self.id]
+            prev_bytes = symbol_bytes[self.prev.id] if self.prev else None
+            next_bytes = symbol_bytes[self.next.id] if self.next else None
+            return f"Symbol({current_bytes}, {self.alive}, {prev_bytes}, {next_bytes})"
 
         __repr__ = __str__
 
@@ -84,7 +84,7 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
         count: int
 
         def __str__(self) -> str:
-            return f"Token({(symbol_id_to_bytes[sym.id] for sym in symbols)}, {count})"
+            return f"Token({(symbol_bytes[sym.id] for sym in symbols)}, {count})"
 
         __repr__ = __str__
 
@@ -96,7 +96,7 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
             return self.data > other.data
 
     def _rev_pair(p: tuple[int, int]) -> tuple[RevBytes, RevBytes]:
-        return RevBytes(symbol_id_to_bytes[p[0]]), RevBytes(symbol_id_to_bytes[p[1]])
+        return RevBytes(symbol_bytes[p[0]]), RevBytes(symbol_bytes[p[1]])
 
     # (A, B) -> (token_idx, sym_idx)
     pair_occurrences: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
@@ -144,12 +144,12 @@ def _merge(token_count: dict[bytes, int], num_merges: int) -> list[tuple[bytes, 
         if most_common_pair is None:
             break
 
-        merged_symbol_id = len(symbol_id_to_bytes)
+        merged_symbol_id = len(symbol_bytes)
 
         # Add new pair to symbol_id_to_bytes and merged_pairs
         sym_a_id, sym_b_id = most_common_pair
-        symbol_id_to_bytes[merged_symbol_id] = symbol_id_to_bytes[sym_a_id] + symbol_id_to_bytes[sym_b_id]
-        merged_pairs.append((symbol_id_to_bytes[sym_a_id], symbol_id_to_bytes[sym_b_id]))
+        symbol_bytes.append(symbol_bytes[sym_a_id] + symbol_bytes[sym_b_id])
+        merged_pairs.append((symbol_bytes[sym_a_id], symbol_bytes[sym_b_id]))
 
         occurrences = pair_occurrences[most_common_pair]
         occ_keep_idxs: list[int] = []
@@ -296,17 +296,17 @@ if __name__ == "__main__":
     #     special_tokens=["<|endoftext|>"],
     # )
 
-    # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
-    #     vocab_size=10000,
-    #     special_tokens=["<|endoftext|>"],
-    # )
-
     vocab, merged_pairs = train_bpe(
-        input_path="./data/owt_train.txt",
-        vocab_size=32000,
+        input_path="./data/TinyStoriesV2-GPT4-train.txt",
+        vocab_size=10000,
         special_tokens=["<|endoftext|>"],
     )
+
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/owt_train.txt",
+    #     vocab_size=32000,
+    #     special_tokens=["<|endoftext|>"],
+    # )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_valid.txt",
