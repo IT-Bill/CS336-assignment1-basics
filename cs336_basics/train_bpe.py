@@ -238,7 +238,7 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    num_processor = 32
+    num_processor = 64
     num_merges = vocab_size - 256 - len(special_tokens)
 
     boundaries = None
@@ -311,17 +311,17 @@ if __name__ == "__main__":
     #     special_tokens=["<|endoftext|>"],
     # )
 
-    vocab, merged_pairs = train_bpe(
-        input_path="./data/TinyStoriesV2-GPT4-train.txt",
-        vocab_size=10000,
-        special_tokens=["<|endoftext|>"],
-    )
-
     # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/owt_train.txt",
-    #     vocab_size=32000,
+    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
+    #     vocab_size=10000,
     #     special_tokens=["<|endoftext|>"],
     # )
+
+    vocab, merged_pairs = train_bpe(
+        input_path="./data/owt_train.txt",
+        vocab_size=32000,
+        special_tokens=["<|endoftext|>"],
+    )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_valid.txt",

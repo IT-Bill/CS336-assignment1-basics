@@ -1,54 +1,51 @@
-use std::{collections::HashMap, fs::File, path::PathBuf, time::Instant};
+use std::{collections::HashMap, fs::File, path::PathBuf};
 
 use fancy_regex::Regex as FancyRegex;
+use indicatif::{ProgressBar, ProgressStyle};
 use memmap2::MmapOptions;
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use rayon::iter::IntoParallelRefIterator;
 use rayon::prelude::*;
 use regex::Regex;
-use indicatif::{ProgressBar, ProgressStyle};
+use thread_local::ThreadLocal;
 
-fn remove_special_tokens(
-    chunk: &str,
+fn get_pre_tokenizer_pattern() -> &'static FancyRegex {
+    static TLS: ThreadLocal<FancyRegex> = ThreadLocal::new();
+    TLS.get_or(|| {
+        let pattern = r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+";
+        // 这里 panic 是安全的，因为 pattern 是硬编码的，测试过没问题就行
+        FancyRegex::new(pattern).expect("Invalid Regex Pattern")
+    })
+}
+
+fn get_special_tokens_pattern(
     special_tokens: &Vec<String>,
-) -> anyhow::Result<Vec<String>, anyhow::Error> {
+) -> anyhow::Result<Regex, anyhow::Error> {
     let escaped_tokens: Vec<String> = special_tokens.iter().map(|t| regex::escape(t)).collect();
 
     let pattern = escaped_tokens.join("|");
 
-    if pattern.is_empty() {
-        return Ok(vec![chunk.to_string()]);
-    }
-
     let re = Regex::new(&pattern)?;
 
-    let result: Vec<String> = re
-        .split(chunk)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect();
-
-    Ok(result)
+    Ok(re)
 }
 
 fn worker(
     chunk: &str,
-    special_tokens: &Vec<String>,
+    special_tokens_re: &Regex,
 ) -> anyhow::Result<HashMap<Vec<u8>, u32>, anyhow::Error> {
-    let pattern = r"'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+";
-
-    // TODO: cache
-    let re = FancyRegex::new(pattern)?;
-
     let mut token_count: HashMap<Vec<u8>, u32> = HashMap::new();
 
-    let sub_chunks = remove_special_tokens(chunk, special_tokens)?;
+    let sub_chunks = special_tokens_re.split(chunk).filter(|s| !s.is_empty());
 
     for sub_chunk in sub_chunks {
-        for m in re.find_iter(&sub_chunk) {
-            *token_count
-                .entry(m?.as_str().as_bytes().to_vec())
-                .or_default() += 1;
+        for m in get_pre_tokenizer_pattern().find_iter(&sub_chunk) {
+            let bytes = m?.as_str().as_bytes();
+            if let Some(c) = token_count.get_mut(bytes) {
+                *c += 1;
+            } else {
+                token_count.insert(bytes.to_vec(), 1);
+            }
         }
     }
 
@@ -74,16 +71,21 @@ pub fn pre_tokenize(
     boundaries: Vec<(usize, usize)>,
     num_threads: usize,
 ) -> PyResult<HashMap<Vec<u8>, u32>> {
-    let start_time = Instant::now();
-
     let f = File::open(path)?;
     let mmap = unsafe { MmapOptions::new().map(&f)? };
 
-    // 1. 【新增】手动创建进度条
+    let special_tokens_re = get_special_tokens_pattern(&special_tokens)
+        .map_err(|e| PyRuntimeError::new_err(format!("Rust Error: {:?}", e)))?;
+
+    // 创建进度条
     let pb = ProgressBar::new(boundaries.len() as u64);
-    pb.set_style(ProgressStyle::with_template(
-        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})"
-    ).unwrap().progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+        )
+        .unwrap()
+        .progress_chars("#>-"),
+    );
 
     // 构建局部线程池
     let pool = rayon::ThreadPoolBuilder::new()
@@ -105,7 +107,7 @@ pub fn pre_tokenize(
                         anyhow::anyhow!(format!("UTF-8 error at {}-{}: {}", start, end, e))
                     })?;
 
-                    let chunk_token_count = worker(chunk, &special_tokens);
+                    let chunk_token_count = worker(chunk, &special_tokens_re);
 
                     pb.inc(1);
 
@@ -114,9 +116,6 @@ pub fn pre_tokenize(
                 .reduce(|| Ok(HashMap::new()), merge_token_count)
         })
     });
-
-    let duration = start_time.elapsed();
-    println!("🦀 Rust 纯计算耗时: {:.4} 秒", duration.as_secs_f64());
 
     token_count.map_err(|e| PyRuntimeError::new_err(format!("Rust error: {:?}", e)))
 }
