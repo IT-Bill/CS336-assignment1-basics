@@ -36,7 +36,7 @@ fn worker(
 ) -> anyhow::Result<HashMap<Vec<u8>, u32>, anyhow::Error> {
     let mut token_count: HashMap<Vec<u8>, u32> = HashMap::new();
 
-    let sub_chunks = special_tokens_re.split(chunk).filter(|s| !s.is_empty());
+    let sub_chunks = special_tokens_re.split(chunk);
 
     for sub_chunk in sub_chunks {
         for m in get_pre_tokenizer_pattern().find_iter(&sub_chunk) {

@@ -4,7 +4,7 @@ import regex as re
 from collections import defaultdict
 
 def _remove_special_tokens(text: str, special_tokens: list[str]) -> list[str]:
-    return [s for s in re.split("|".join([re.escape(t) for t in special_tokens]), text) if s]
+    return [s for s in re.split("|".join([re.escape(t) for t in special_tokens]), text)]
 
 
 def _pre_tokenize(text: str, special_tokens: list[str]) -> dict[bytes, int]:
