@@ -250,7 +250,7 @@ def train_bpe(
         num_threads=num_processor,
     )
 
-    merged_pairs = _merge(token_count, num_merges)
+    merged_pairs = rust_lib.merge(token_count, num_merges)
 
     vocab: dict[int, bytes] = {}
     vocab.update({i: i.to_bytes() for i in range(256)})
@@ -292,21 +292,21 @@ def convert_tokens_to_string(tokens_bytes: bytes) -> str:
 if __name__ == "__main__":
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/tiny.txt",
-    #     vocab_size=262,
+    #     vocab_size=500,
+    #     special_tokens=["<|endoftext|>"],
+    # )
+
+    # vocab, merged_pairs = train_bpe(
+    #     input_path="./data/TinyStoriesV2-GPT4-train.txt",
+    #     vocab_size=10000,
     #     special_tokens=["<|endoftext|>"],
     # )
 
     vocab, merged_pairs = train_bpe(
-        input_path="./data/TinyStoriesV2-GPT4-train.txt",
-        vocab_size=10000,
+        input_path="./data/owt_train.txt",
+        vocab_size=32000,
         special_tokens=["<|endoftext|>"],
     )
-
-    # vocab, merged_pairs = train_bpe(
-    #     input_path="./data/owt_train.txt",
-    #     vocab_size=32000,
-    #     special_tokens=["<|endoftext|>"],
-    # )
 
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/owt_valid.txt",

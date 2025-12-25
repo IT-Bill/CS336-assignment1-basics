@@ -6,3 +6,9 @@ def pre_tokenize(
     boundaries: list[tuple[int, int]],
     num_threads: int,
 ) -> dict[bytes, int]: ...
+
+
+def merge(
+    token_count: dict[bytes, int],
+    num_merges: int,
+) -> list[tuple[bytes, bytes]]: ...
