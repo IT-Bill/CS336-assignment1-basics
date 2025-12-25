@@ -13,3 +13,11 @@ class bpe:
         token_count: dict[bytes, int],
         num_merges: int,
     ) -> list[tuple[bytes, bytes]]: ...
+    @staticmethod
+    def train(
+        path: str | os.PathLike,
+        special_tokens: list[str],
+        boundaries: list[tuple[int, int]],
+        num_merges: int,
+        num_threads: int,
+    ) -> list[tuple[bytes, bytes]]: ...

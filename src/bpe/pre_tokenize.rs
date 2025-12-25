@@ -1,13 +1,15 @@
-use std::{collections::HashMap, fs::File, path::PathBuf};
+use std::path::{Path, PathBuf};
+use std::{collections::HashMap, fs::File};
 
 use fancy_regex::Regex as FancyRegex;
-use indicatif::{ProgressBar, ProgressStyle};
 use memmap2::MmapOptions;
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use rayon::iter::IntoParallelRefIterator;
 use rayon::prelude::*;
 use regex::Regex;
 use thread_local::ThreadLocal;
+
+use crate::utils::create_progress_bar;
 
 fn get_pre_tokenizer_pattern() -> &'static FancyRegex {
     static TLS: ThreadLocal<FancyRegex> = ThreadLocal::new();
@@ -18,9 +20,7 @@ fn get_pre_tokenizer_pattern() -> &'static FancyRegex {
     })
 }
 
-fn get_special_tokens_pattern(
-    special_tokens: &Vec<String>,
-) -> anyhow::Result<Regex, anyhow::Error> {
+fn get_special_tokens_pattern(special_tokens: &[String]) -> anyhow::Result<Regex, anyhow::Error> {
     let escaped_tokens: Vec<String> = special_tokens.iter().map(|t| regex::escape(t)).collect();
 
     let pattern = escaped_tokens.join("|");
@@ -63,29 +63,21 @@ fn merge_token_count(
     Ok(map_a)
 }
 
-#[pyfunction]
-pub fn pre_tokenize(
+pub fn pre_tokenize_impl(
     py: Python,
-    path: PathBuf,
-    special_tokens: Vec<String>,
-    boundaries: Vec<(usize, usize)>,
+    path: &Path,
+    special_tokens: &[String],
+    boundaries: &[(usize, usize)],
     num_threads: usize,
 ) -> PyResult<HashMap<Vec<u8>, u32>> {
     let f = File::open(path)?;
     let mmap = unsafe { MmapOptions::new().map(&f)? };
 
-    let special_tokens_re = get_special_tokens_pattern(&special_tokens)
+    let special_tokens_re = get_special_tokens_pattern(special_tokens)
         .map_err(|e| PyRuntimeError::new_err(format!("Rust Error: {:?}", e)))?;
 
     // 创建进度条
-    let pb = ProgressBar::new(boundaries.len() as u64);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-        )
-        .unwrap()
-        .progress_chars("#>-"),
-    );
+    let pb = create_progress_bar(num_threads as u64, "Pre-tokenizing");
 
     // 构建局部线程池
     let pool = rayon::ThreadPoolBuilder::new()
@@ -117,5 +109,24 @@ pub fn pre_tokenize(
         })
     });
 
+    pb.finish();
+
     token_count.map_err(|e| PyRuntimeError::new_err(format!("Rust error: {:?}", e)))
+}
+
+#[pyfunction]
+pub fn pre_tokenize(
+    py: Python,
+    path: PathBuf,
+    special_tokens: Vec<String>,
+    boundaries: Vec<(usize, usize)>,
+    num_threads: usize,
+) -> PyResult<HashMap<Vec<u8>, u32>> {
+    Ok(pre_tokenize_impl(
+        py,
+        &path,
+        &special_tokens,
+        &boundaries,
+        num_threads,
+    )?)
 }
