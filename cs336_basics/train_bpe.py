@@ -1,8 +1,8 @@
 import os
 import json
-import functools
 from typing import BinaryIO
 from cs336_basics import rust_lib
+from cs336_basics.tokenization_utils import convert_bytes_to_gpt2_string
 
 
 def _find_chunk_boundaries(
@@ -112,35 +112,6 @@ def train_bpe(
     return vocab, merged_pairs
 
 
-@functools.lru_cache
-def bytes_to_unicode():
-    """
-    Returns list of utf-8 byte and a corresponding list of unicode strings.
-    The reversible bpe codes work on unicode strings.
-    This means you need a large # of unicode characters in your vocab if you want to avoid UNKs.
-    When you're at something like a 10B token dataset you end up needing around 5K for decent coverage.
-    This is a significant percentage of your normal, say, 32K bpe vocab.
-    To avoid that, we want lookup tables between utf-8 bytes and unicode strings.
-    And avoids mapping to whitespace/control characters the bpe code barfs on.
-    """
-    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
-    cs = bs[:]
-    n = 0
-    for b in range(2**8):
-        if b not in bs:
-            bs.append(b)
-            cs.append(2**8 + n)
-            n += 1
-    cs = [chr(n) for n in cs]
-    return dict(zip(bs, cs))
-
-
-def convert_tokens_to_string(tokens_bytes: bytes) -> str:
-    """把 bytes 转换成 GPT-2 风格的 Unicode 字符串"""
-    byte_encoder = bytes_to_unicode()
-    return "".join([byte_encoder[b] for b in tokens_bytes])
-
-
 if __name__ == "__main__":
     # vocab, merged_pairs = train_bpe(
     #     input_path="./data/tiny.txt",
@@ -173,7 +144,7 @@ if __name__ == "__main__":
 
     for token_id, token_bytes in vocab.items():
         # 将 bytes 转为带 Ġ 的字符串
-        token_str = convert_tokens_to_string(token_bytes)
+        token_str = convert_bytes_to_gpt2_string(token_bytes)
         gpt2_style_vocab[token_str] = token_id
 
     # 3. 保存
@@ -183,8 +154,8 @@ if __name__ == "__main__":
 
     pretty_merges = []
     for p1, p2 in merged_pairs:
-        s1 = convert_tokens_to_string(p1)
-        s2 = convert_tokens_to_string(p2)
+        s1 = convert_bytes_to_gpt2_string(p1)
+        s2 = convert_bytes_to_gpt2_string(p2)
         # 通常 merges.txt 存的是 "Ġ s", "t r" 这种空格分隔的形式
         pretty_merges.append(f"{s1} {s2}")
 

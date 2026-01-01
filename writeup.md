@@ -128,6 +128,64 @@ Your BPE training function should return the resulting vocabulary and merges:
 **Resource requirements:** ≤ 30 minutes (no GPUs), ≤ 30GB RAM
 **Deliverable:** A one-to-two sentence response.
 
+```bash
+Pre-tokenizing [00:00:02] [########################################] 64/64 (0s)         
+Building tokens [00:00:00] [########################################] 59933/59933 (0s)   
+Merging [00:00:00] [########################################] 9743/9743 (0s) 
+
+Pre-tokenizing [00:00:19] [########################################] 64/64 (0s)         
+Building tokens [00:00:10] [########################################] 6601892/6601892 (0s)
+Merging [00:03:49] [########################################] 31743/31743 (0s) 
+```
+
+```python
+# TinyStories
+['Ġaccomplishment',
+ 'Ġdisappointment',
+ 'Ġresponsibility',
+ 'Ġuncomfortable',
+ 'Ġcompassionate',
+ 'Ġunderstanding',
+ 'Ġneighbourhood',
+ 'ĠUnfortunately',
+ 'Ġdetermination',
+ 'Ġencouragement',
+ 'Ġunfortunately',
+ 'Ġcongratulated',
+ 'Ġextraordinary',
+ 'Ġgranddaughter',
+ '<|endoftext|>',
+ 'Ġdisappointed',
+ 'Ġenthusiastic',
+ 'Ġaccidentally',
+ 'Ġrefrigerator',
+ 'Ġveterinarian']
+
+# OpenWebText 
+['ÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤ',
+ '----------------------------------------------------------------',
+ '----------------------------------------',
+ '----------------------------------',
+ '__________________________________',
+ '--------------------------------',
+ '________________________________',
+ 'ÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤÃĥÃĤ',
+ 'âĢĶâĢĶâĢĶâĢĶâĢĶâĢĶâĢĶâĢĶ--------',
+ '================================',
+ '................................',
+ 'âĢĶâĢĶâĢĶâĢĶâĢĶâĢĶâĢĶâĢĶ',
+ 'Ġdisproportionately',
+ 'Ġtelecommunications',
+ '----------------**',
+ '__________________',
+ 'Ġenvironmentalists',
+ 'Ġresponsibilities',
+ 'Ġunconstitutional',
+ 'Ġcryptocurrencies']
+```
+
+
+
 **(b)** Profile your code. What part of the tokenizer training process takes the most time?
 **Deliverable:** A one-to-two sentence response.
 
