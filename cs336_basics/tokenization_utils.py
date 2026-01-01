@@ -2,7 +2,7 @@ import functools
 
 
 @functools.lru_cache
-def bytes_to_unicode():
+def gpt2_bytes_to_unicode():
     """
     Returns list of utf-8 byte and a corresponding list of unicode strings.
     The reversible bpe codes work on unicode strings.
@@ -24,20 +24,7 @@ def bytes_to_unicode():
     return dict(zip(bs, cs))
 
 
-@functools.lru_cache
-def unicode_to_bytes():
-    return {v: k for k, v in bytes_to_unicode().items()}
-
-
 def convert_bytes_to_gpt2_string(b: bytes) -> str:
     """把 bytes 转换成 GPT-2 风格的 Unicode 字符串"""
-    byte_encoder = bytes_to_unicode()
+    byte_encoder = gpt2_bytes_to_unicode()
     return "".join([byte_encoder[i] for i in b])
-
-
-# def convert_gpt2_string_to_bytes(s: str) -> bytes:
-#     unicode_encoder = unicode_to_bytes()
-    
-#     return bytes([unicode_encoder[i] if unicode_encoder.get(i) else i for i in s])
-    
-
