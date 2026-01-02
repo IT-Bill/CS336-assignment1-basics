@@ -1,5 +1,6 @@
 import json
 import regex
+import time
 
 from tqdm import tqdm
 from collections.abc import Iterable, Iterator
@@ -11,7 +12,10 @@ class Tokenizer:
     PRE_TOKENIZE_PATTERN = regex.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
     def __init__(
-        self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None = None
+        self,
+        vocab: dict[int, bytes],
+        merges: list[tuple[bytes, bytes]],
+        special_tokens: list[str] | None = None,
     ):
         self.vocab = vocab
         self.vocab_rev = {v: k for k, v in vocab.items()}
@@ -77,7 +81,12 @@ class Tokenizer:
             for i in range(len(token_bytes) - 1)
         ]
         # 需要合并的 pairs 的 index
+        count = 0
         while True:
+            count += 1
+            if count % 1000 == 0:
+                print(count, pairs)
+
             pairs_idx: list[int] = []
             min_merge_idx = len(self.merges)
             for i, pair in enumerate(pairs):
@@ -89,18 +98,26 @@ class Tokenizer:
                         pairs_idx = [i]
 
                     elif merge_idx == min_merge_idx:
+                        if i == pairs_idx[-1] + 1:
+                            # 发生重叠（例如 AAAA 中的中间 A），跳过当前这个，保留最左边的
+                            continue
+
                         pairs_idx.append(i)
 
             if pairs_idx:
                 # ! The length will change during iteration
                 # num_pairs = len(pairs)
                 vocab_int = self.merge_to_vocab[min_merge_idx]
+
                 for i in reversed(pairs_idx):
+                    # ! Prevent infinite loop
+                    if len(pairs) == 1:
+                        return [vocab_int]
+
                     if i + 1 < len(pairs):
                         pairs[i + 1] = (vocab_int, pairs[i + 1][1])
 
-                    if len(pairs) > 1:
-                        del pairs[i]
+                    del pairs[i]
 
                     if i - 1 >= 0:
                         pairs[i - 1] = (pairs[i - 1][0], vocab_int)
@@ -137,31 +154,68 @@ class Tokenizer:
         return b"".join([self.vocab[id] for id in ids]).decode(errors="replace")
 
 
-
 if __name__ == "__main__":
     import os
     import mmap
     import random
-    
-    def problem_a():
+    import numpy as np
+
+    def tokenizer_experiments():
         tokenizer = Tokenizer.from_files(
             "log/vocab_owt.json",
             "log/merges_owt.txt",
-            ["<|endoftext|>"]
+            ["<|endoftext|>"],
         )
-        
+
+        # tokenizer = Tokenizer.from_files(
+        #     "log/tinystories_vocab.json",
+        #     "log/tinystories_merges.txt",
+        #     ["<|endoftext|>"]
+        # )
+
         with open("data/owt_train.txt", "rb") as f:
+            # with open("data/TinyStoriesV2-GPT4-train.txt", "rb") as f:
+
             f.seek(0, os.SEEK_END)
             file_size = f.tell()
             f.seek(0)
-            
+
             mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-            MB = 1024 * 10
-            
+            MB = 1024 * 1024
+
+            avg_ratio = 0
+            avg_speed = 0
             for _ in range(10):
                 start = random.randint(0, file_size - MB)
-                token_ids = tokenizer.encode(mm[start: start + MB].decode())
-                
+
+                start_time = time.time()
+                token_ids = tokenizer.encode(mm[start : start + MB].decode())
+                avg_ratio += MB / (len(token_ids) * 4)
+                avg_speed += MB / (time.time() - start_time)
                 print(f"Compression Ratio: {MB} / {len(token_ids) * 4} = {MB / (len(token_ids) * 4)}")
-    
-    problem_a()
+
+            avg_ratio /= 10
+            avg_speed /= 10
+            print(avg_ratio, "%")
+            print(avg_speed, "B/sec")
+            print(avg_speed / MB, "MB/sec")
+
+    def save():
+        tokenizer = Tokenizer.from_files(
+            "log/tinystories_vocab.json",
+            "log/tinystories_merges.txt",
+            ["<|endoftext|>"],
+        )
+
+        with open("data/TinyStoriesV2-GPT4-train.txt", "rb") as f:
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            MB = 1024 * 1024
+
+            sample_token_ids = tokenizer.encode(mm[0:MB].decode())
+            all_token_ids = tokenizer.encode(mm[:].decode())
+            
+            np.save("token_ids/tinystories_sample_1M.npy", np.array(sample_token_ids, dtype=np.uint16))
+            np.save("token_ids/tinystories.npy", np.array(all_token_ids, dtype=np.uint16))
+
+    # tokenizer_experiments()
+    # save()

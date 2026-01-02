@@ -221,11 +221,27 @@ def decode(self, ids: list[int]) -> str
 **(a)** Sample 10 documents from TinyStories and OpenWebText. Using your previously-trained TinyStories and OpenWebText tokenizers (10K and 32K vocabulary size, respectively), encode these sampled documents into integer IDs. What is each tokenizer’s compression ratio (bytes/token)?
 **Deliverable:** A one-to-two sentence response.
 
+```bash
+TinyStories: 1.0293434524045657
+OpenWebText: 1.0972816665862417
+```
+
 **(b)** What happens if you tokenize your OpenWebText sample with the TinyStories tokenizer? Compare the compression ratio and/or qualitatively describe what happens.
 **Deliverable:** A one-to-two sentence response.
 
+```
+tokenize OpenWebText sample with the TinyStories tokenizer: 0.7898573356678635
+tokenize TinyStories sample with the OpenWebText tokenizer: 1.0009906269142852
+```
+
 **(c)** Estimate the throughput of your tokenizer (e.g., in bytes/second). How long would it take to tokenize the Pile dataset (825GB of text)?
 **Deliverable:** A one-to-two sentence response.
+
+```
+3736965 B/second
+3.72307 MB/second
+Need about 63 hours to tokenize the pile dataset.
+```
 
 **(d)** Using your TinyStories and OpenWebText tokenizers, encode the respective training and development datasets into a sequence of integer token IDs. We’ll use this later to train our language model. We recommend serializing the token IDs as a NumPy array of datatype `uint16`. Why is `uint16` an appropriate choice?
 **Deliverable:** A one-to-two sentence response.
