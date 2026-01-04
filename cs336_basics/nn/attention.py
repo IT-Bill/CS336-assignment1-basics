@@ -28,7 +28,8 @@ def scaled_dot_product_attention(
     scaled_scores = scores * torch.rsqrt(torch.tensor(Q.shape[-1]))
     
     if mask is not None:
-        scaled_scores = scaled_scores.masked_fill(mask, -1e9)
+        # True indicates valid, False indicates invalid
+        scaled_scores = scaled_scores.masked_fill(mask == 0, -1e9)
     
     softmax_scores = softmax(scaled_scores, dim=-1)
     
