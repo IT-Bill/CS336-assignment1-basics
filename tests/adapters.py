@@ -160,7 +160,7 @@ def run_multihead_self_attention(
     attention.k_weight.load_state_dict({"W": k_proj_weight})
     attention.v_weight.load_state_dict({"W": v_proj_weight})
     attention.o_weight.load_state_dict({"W": o_proj_weight})
-    return attention.multi_head_self_attention(in_features)
+    return attention(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -212,7 +212,7 @@ def run_multihead_self_attention_with_rope(
     attention.v_weight.load_state_dict({"W": v_proj_weight})
     attention.o_weight.load_state_dict({"W": o_proj_weight})
     
-    return attention.multi_head_self_attention(in_features, token_positions)
+    return attention(in_features, token_positions)
 
 
 def run_rope(
@@ -309,7 +309,28 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from cs336_basics.nn import TransformerBlock
+    block = TransformerBlock(
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        max_seq_len=max_seq_len,
+        theta=theta,
+    )
+    block.ln1.load_state_dict({"G": weights["ln1.weight"]})
+    
+    block.attn.q_weight.load_state_dict({"W": weights["attn.q_proj.weight"]})
+    block.attn.k_weight.load_state_dict({"W": weights["attn.k_proj.weight"]})
+    block.attn.v_weight.load_state_dict({"W": weights["attn.v_proj.weight"]})
+    block.attn.o_weight.load_state_dict({"W": weights["attn.output_proj.weight"]})
+    
+    block.ln2.load_state_dict({"G": weights["ln2.weight"]})
+    
+    block.ffn.w1.load_state_dict({"W": weights["ffn.w1.weight"]})
+    block.ffn.w2.load_state_dict({"W": weights["ffn.w2.weight"]})
+    block.ffn.w3.load_state_dict({"W": weights["ffn.w3.weight"]})
+    
+    return block(in_features)
 
 
 def run_transformer_lm(

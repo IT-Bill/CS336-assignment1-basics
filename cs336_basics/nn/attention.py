@@ -55,15 +55,15 @@ class Attention(nn.Module):
 
         return self.causal_mask
 
-    def multi_head_self_attention(
+    def forward(
         self,
         x: Float[Tensor, "... seq_len d_in"],
-        token_positions: Int[Tensor, " ... sequence_length"] | None = None,
+        token_positions: Int[Tensor, " ... seq_len"] | None = None,
     ) -> Float[Tensor, "... seq_len d_out"]:
         q_weight_x: Float[Tensor, "... seq_len d_k"] = self.q_weight(x)
         k_weight_x: Float[Tensor, "... seq_len d_k"] = self.k_weight(x)
         v_weight_x: Float[Tensor, "... seq_len d_v"] = self.v_weight(x)
-
+        
         heads_q_weight_x = rearrange(
             q_weight_x,
             # ! not (d_k head)
