@@ -119,8 +119,8 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    from cs336_basics.nn import scaled_dot_product_attention
-    return scaled_dot_product_attention(Q, K, V, mask)
+    from cs336_basics.nn import Attention
+    return Attention.scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -154,7 +154,13 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.nn import Attention
+    attention = Attention(d_model, num_heads)
+    attention.q_weight.load_state_dict({"W": q_proj_weight})
+    attention.k_weight.load_state_dict({"W": k_proj_weight})
+    attention.v_weight.load_state_dict({"W": v_proj_weight})
+    attention.o_weight.load_state_dict({"W": o_proj_weight})
+    return attention.multi_head_self_attention(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -194,7 +200,19 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.nn import Attention
+    attention = Attention(
+        d_model=d_model,
+        num_heads=num_heads,
+        max_seq_len=max_seq_len,
+        theta=theta,
+    )
+    attention.q_weight.load_state_dict({"W": q_proj_weight})
+    attention.k_weight.load_state_dict({"W": k_proj_weight})
+    attention.v_weight.load_state_dict({"W": v_proj_weight})
+    attention.o_weight.load_state_dict({"W": o_proj_weight})
+    
+    return attention.multi_head_self_attention(in_features, token_positions)
 
 
 def run_rope(

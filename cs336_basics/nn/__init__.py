@@ -4,7 +4,7 @@ from .rmsnorm import RMSNorm
 from .swiglu import SwiGLU
 from .rope import RotaryPositionalEmbedding
 from .softmax import softmax
-from .attention import scaled_dot_product_attention
+from .attention import Attention
 
 __all__ = [
     "Linear",
@@ -12,7 +12,7 @@ __all__ = [
     "RMSNorm",
     "SwiGLU",
     "RotaryPositionalEmbedding",
+    "Attention",
     
     "softmax",
-    "scaled_dot_product_attention"
 ]
