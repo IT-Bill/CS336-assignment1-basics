@@ -5,7 +5,7 @@ from .swiglu import SwiGLU
 from .rope import RotaryPositionalEmbedding
 from .softmax import softmax
 from .attention import Attention
-from .transformer import TransformerBlock
+from .transformer import TransformerBlock, TransformerLM
 
 __all__ = [
     "Linear",
@@ -15,6 +15,7 @@ __all__ = [
     "RotaryPositionalEmbedding",
     "Attention",
     "TransformerBlock",
+    "TransformerLM",
     
     "softmax",
 ]

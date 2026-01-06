@@ -1,12 +1,14 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from einops import rearrange
 
+from .linear import Linear
 from .rmsnorm import RMSNorm
 from .attention import Attention
 from .swiglu import SwiGLU
+from .embedding import Embedding
 
 
 class TransformerBlock(nn.Module):
@@ -76,3 +78,84 @@ class TransformerBlock(nn.Module):
         out += identity
 
         return out
+
+
+class TransformerLM(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int,
+        d_model: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: int,
+        rope_theta: float,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        """Given the weights of a Transformer language model and input indices,
+        return the output of running a forward pass on the input indices.
+
+        This function should use RoPE.
+
+        Args:
+            vocab_size (int): The number of unique items in the output vocabulary to be predicted.
+            context_length (int): The maximum number of tokens to process at once.
+            d_model (int): The dimensionality of the model embeddings and sublayer outputs.
+            num_layers (int): The number of Transformer layers to use.
+            num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
+                evenly divisible by `num_heads`.
+            d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
+            rope_theta (float): The RoPE $Theta$ parameter.
+        """
+        super().__init__()
+        
+        self.embedding = Embedding(
+            num_embeddings=vocab_size,
+            embedding_dim=d_model,
+            device=device,
+            dtype=dtype
+        )
+        self.blocks = [
+            TransformerBlock(
+                d_model=d_model,
+                num_heads=num_heads,
+                d_ff=d_ff,
+                max_seq_len=context_length,
+                theta=rope_theta,
+                device=device,
+                dtype=dtype,
+            )
+            for _ in range(num_layers)
+        ]
+        self.ln_final = RMSNorm(
+            d_model=d_model,
+            device=device,
+            dtype=dtype,
+        )
+        self.lm_head = Linear(
+            in_features=d_model,
+            out_features=vocab_size,
+            device=device,
+            dtype=dtype
+        )
+        
+    
+    def forward(
+        self,
+        x: Int[Tensor, "... seq_len"],
+    ) -> Float[Tensor, "... seq_len vocab_size"]:
+        
+        out = self.embedding(x)
+        
+        for block in self.blocks:
+            out = block(out)
+        
+        out = self.ln_final(out)
+         
+        out = self.lm_head(out)
+        
+        # out = softmax(out, dim=-1)
+        
+        return out 
+        
